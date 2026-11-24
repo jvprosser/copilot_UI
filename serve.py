@@ -22,11 +22,12 @@ def _root() -> Path:
 
 
 ROOT = _root()
+STATIC_DIR = ROOT / "out"
 
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=str(ROOT), **kwargs)
+        super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
