@@ -49,9 +49,9 @@ def main() -> None:
     host = "127.0.0.1"
     port = int(os.getenv("CDSW_APP_PORT", "8080"))
     server = ThreadingHTTPServer((host, port), Handler)
-    print(f"Serving UI on http://{host}:{port}")
+    print(f"Serving UI on http://{host}:{port}", flush=True)
     server.serve_forever()
 
 
-if __name__ == "__main__" and globals().get("__file__"):
+if __name__ == "__main__":
     main()
