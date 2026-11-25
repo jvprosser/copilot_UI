@@ -1,41 +1,69 @@
 # UI_ARCHITECTURE.md & Rules of Engagement
 
-## 1. Core Component Philosophy
-- **Data-Driven Rendering:** The UI contains **zero** domain-specific logic. It does not know what "Claims", "Underwriting", or "Retirement" are. It renders strictly from the `layout`, `routing_directives`, `lane_messages`, `checks`, `session_graph`, `view_data`, and `actions` returned by the backend.
-- **Fixed Split-Pane Workspace:** The backend emits a fixed `split_pane` layout (`widgets: ["chat_feed", "routing_summary_panel"]`, `focus: "chat_feed"`).
-  - **Left Pane (`chat_feed`):**
-    - **Top-Left Intake & Context Switcher Panel:** Compact command bar with `pack_id` selector (`claims`, `underwriting`, `retirement_distributions`, `retirement_rollovers`), optional `dialect` override (`impala` | `trino`), entity discovery input, a 2-line clamped response strip, and a **CoT** dialog trigger button. Submitting here intentionally omits `entity_id` and `lane` to force `run_orchestrator` entity discovery and context switching at any time.
-    - **Parallel `LanePanel` Grid:** Renders one self-contained `LanePanel` card per active directive in `content.routing_directives` (single full-width panel for a `blocking: true` gate; responsive grid for concurrent `blocking: false` lanes). Each card has its own directive header (active probe + `next_step`), scrollable isolated lane transcript, conditional action bar, and independent text input.
-  - **Right Pane (`routing_summary_panel`):** Domain-agnostic inspector for active `routing_directives`, playbook `checks` (including `skipped_reason`), pre-fetched `view_data`, and `session_graph`.
-  - **Global CoT Dialog:** Clicking any **CoT** button opens a modal displaying `meta.debug_cot`, `meta.run_id`, `meta.dialect`, and `meta.active_lane`.
-- **Multi-Lane Turn Lifecycle:**
-  - **Turn 1 / Context Switch (Entity Discovery):** Posts `{ user_text, pack_id }` (omitting `dialect` unless overridden so the backend uses the pack manifest default, and omitting `entity_id` and `lane`).
-  - **Turn 2+ (Lane-Targeted Conversation):** Posts `{ user_text, pack_id, entity_id, lane }`.
-  - **Blocking Gates vs. Parallel Lanes:** A `blocking: true` directive preempts all other lanes. When `blocking: false`, multiple lane panels can be worked concurrently; HTTP requests are serialized via `isSubmitting` to avoid race conditions during post-turn `patch_session_field` playbook re-evaluations.
-- **State Synchronization:** The Zustand store caches per-lane transcripts (`transcriptsByLane[lane]`) and drafts (`draftsByLane[lane]`), atomically resets them when `meta.entity_id` or `pack_id` changes, and preserves existing lane cards if an intake query returns a missing-id envelope (`entity_id: null`).
+The UI renders the backend envelope. It does not encode playbook rules, field names, or specialist prompts. The pack selector offers the active pack ids (`claims`, `underwriting`, `retirement_distributions`, `retirement_rollovers`). The dialect control offers `impala` and `trino`, and it is omitted from the request unless the user sets it.
 
-## 2. Cloudera AI Application Deployment (`serve.py`)
-- **Static Export Build:** Because the production app is hosted as a Cloudera AI Application served by Python's `SimpleHTTPRequestHandler` (`serve.py`), Next.js must use `output: "export"` in `next.config.ts` (no Node.js runtime or Next.js API routes in production).
-- **Entrypoint & Port Binding:** Configure the Cloudera AI Application **Script** field to `serve.py`. It binds `ThreadingHTTPServer` to `127.0.0.1` on `CDSW_APP_PORT` (default `8080`) and serves the static build directory.
-- **Runtime API Base Resolution (`/config.js`):**
-  - Set `PROCESS_AGENT_API_URL` in the Cloudera AI Application environment to the backend origin with no trailing slash (e.g., `https://process-agent.<workspace-domain>`). Leave it empty to keep requests on the same origin.
-  - `serve.py` intercepts `GET /config.js` (`Cache-Control: no-store`) and dynamically returns `export const API_BASE = "<PROCESS_AGENT_API_URL>";`.
-  - `src/lib/api/client.ts` resolves the API base URL at runtime from `/config.js` first, falling back to `process.env.NEXT_PUBLIC_API_BASE_URL` for local `next dev` workflows, and finally `""` (same origin).
+## 1. What the UI renders
 
-## 3. AI-Optimized Codebase Rules
-- **No Barrel Files:** Never create `index.ts` re-export files. Always use explicit, direct file imports (e.g., `import { ChatResponse } from "@/types/api-contract"`).
-- **Strict Typing over Inference:** Export explicit TypeScript `interface` definitions for every API payload, component prop, and state object. Never use `any` (use `unknown` or `Record<string, unknown>` for dynamic graph nodes).
-- **Single-Responsibility Files:** Keep components small and focused. Co-locate component-specific prop interfaces and Tailwind styling inside the component file.
-- **Root Anchor Documentation:** Keep this file updated at the repository root so contributors and AI assistants can attach it as context.
+`layout` is fixed: `template: split_pane`, `widgets: [chat_feed, routing_summary_panel]`, `focus: chat_feed`.
 
-## 4. Directory Map
-- `serve.py` — Cloudera AI Application static file server and runtime `/config.js` endpoint.
-- `src/types/api-contract.ts` — Phase 25.2 strict TypeScript interfaces for `/api/v1/chat` and `/api/v1/action`.
-- `src/lib/api/client.ts` — Typed fetch client resolving `API_BASE` from `/config.js` (runtime) with `NEXT_PUBLIC_API_BASE_URL` fallback (local dev).
-- `src/store/sessionStore.ts` — Zustand session store managing pack/dialect config, context switching, per-lane transcripts/drafts, CoT modal state, and action toasts.
-- `src/components/layout/` — `SplitPane` layout wrapper and `CotDialog` modal.
+**Left pane (`chat_feed`)**
+
+- **Intake and context switch.** Pack selector, optional dialect override, and one text input. The response strip shows `content.chat_text`. A CoT button opens the dialog for this turn.
+- **One lane card per `content.routing_directives` item.** A `blocking: true` directive is the only item in that list, so the card is full width. Each `blocking: false` directive is one concurrent lane. The card header shows that directive's `next_step`, `agent_role`, and `routing_reason`. The transcript is `transcriptsByLane[directive.lane]`. Each card has its own draft and text input.
+- **Action bar.** `actions` belongs to the projected directive: the blocking gate if one is present, otherwise the requested lane, otherwise `routing_directives[0]`. Render `quick_replies` and `tool_invocations` on the card whose `lane` equals `routing_summary.lane`. Other cards do not show them. Both lists are empty unless that directive has `letter_on_request: true`. The invocation is `intent: save_entry_artifact`, a `label`, and `payload.entry_id`. `POST /api/v1/action` sends `pack_id`, `intent`, and `payload`. It does not send `run_id`. The response is `status` and `artifact`. The action does not replace the chat envelope.
+
+**Right pane (`routing_summary_panel`)**
+
+Inspector for `routing_directives`, `checks`, `view_data`, and `session_graph`. A check has `probe_id`, `title`, `status`, and `detail`. `status` is `assigned`, `did_not_apply`, or `skipped`. `skipped_reason` is present only when it is `lane_already_matched`.
+
+**CoT dialog**
+
+Shows `meta.debug_cot` (a list of strings), `meta.run_id`, `meta.dialect`, and `meta.active_lane`.
+
+`routing_summary` is always an object. `next_step`, `agent_role`, `lane`, and `routing_reason` are strings or `null`. After a turn that re-evaluates the playbook, `routing_summary` and `meta.terminal` follow the projected directive. `chat_text` stays the specialist who already spoke.
+
+## 2. Chat turns
+
+Requests are serialized. A second chat or action request is dropped while an in-flight request is active (requests are not queued), because a `patch_session_field` turn re-evaluates the playbook inside that same response.
+
+**Intake and context switch.** Post `{ user_text, pack_id }` plus `dialect` only when the user has set one. Omit `entity_id` and `lane`. The backend extracts the id and runs one specialist. `meta.active_lane` is that lane. `content.lane_messages` is the full transcript for that lane, not a delta. Replace `transcriptsByLane[active_lane]` with that array. Leave every other lane's cached transcript in place.
+
+Replace `activeMeta`, `activeLayout`, `activeContent`, and `activeActions` from the response, including when `meta.entity_id` is unchanged. A second intake of the same entity still returns a new directive list, checks, `session_graph`, and `view_data`.
+
+When `meta.entity_id` is non-null and differs from the entity already on screen, clear `transcriptsByLane`, `draftsByLane`, and per-lane CoT, then store `lane_messages` on `transcriptsByLane[active_lane]`.
+
+**Missing id.** `meta.entity_id` is `null`, `routing_directives` is empty, and `chat_text` is the notice. Put that notice in the intake strip and store this turn's CoT. Do not clear transcripts, drafts, lane cards, or the envelope already on screen.
+
+**Lane follow-up.** Requires the entity id already on screen. Post `{ user_text, pack_id, entity_id, lane }` plus `dialect` only when the user has set one.
+
+- When `meta.active_lane` is set, replace `transcriptsByLane[active_lane]` with `content.lane_messages`, store that turn's CoT on that lane, and clear the draft for the lane the user sent. Replace the active envelope so directives, checks, `session_graph`, and `view_data` match the response.
+- When the requested lane is no longer active, the response is HTTP 200 with `meta.active_lane: null`, an empty `lane_messages`, and the notice in `chat_text`. Do not replace any transcript with the empty array. Keep `draftsByLane[lane]`. Render `chat_text` in a dismissible `laneNotice` banner above the lane grid, not on the removed card. Replace `activeMeta`, `activeActions`, `routing_directives`, `checks`, and `routing_summary`. Preserve the existing `view_data`, `session_graph`, and `activeContent.chat_text`.
+
+Changing `pack_id` clears the envelope, intake strip, transcripts, drafts, and per-lane CoT.
+
+## 3. Cloudera AI application
+
+Production is a static export. `next.config.ts` sets `output: "export"`. The Cloudera application Script field is `serve.py`. It binds `127.0.0.1` and `CDSW_APP_PORT` (default `8080`) and serves `out/`.
+
+`GET /config.js` is `Cache-Control: no-store` and returns `export const API_BASE = "<PROCESS_AGENT_API_URL>";`. The value has no trailing slash. An empty value keeps requests on the same origin. The API client reads `/config.js` at runtime, then `NEXT_PUBLIC_API_BASE_URL` during `next dev`, then `""`.
+
+## 4. Code rules
+
+- No `index.ts` barrel files. Import from the file that defines the symbol.
+- No `any`. Use `unknown` or `Record<string, unknown>` for `session_graph` and `view_data`.
+- One component per file. Keep that component's props in the same file.
+- This document is the root `UI_ARCHITECTURE.md`.
+
+## 5. Directory map
+
+- `serve.py` — static file server and `/config.js`.
+- `src/types/api-contract.ts` — `ChatRequest`, `ChatResponse`, and `ActionRequest`.
+- `src/lib/api/client.ts` — `postChat` and `postAction`. Resolves `API_BASE` as in Section 3.
+- `src/store/sessionStore.ts` — pack, dialect, envelope, per-lane transcripts and drafts, CoT, action toast.
+- `src/components/layout/` — `SplitPane` and `CotDialog`.
 - `src/components/widgets/` — `IntakePanel`, `LanePanel`, `ChatFeed`, `RoutingSummaryPanel`, and `WidgetRegistry`.
 
-## 5. API Endpoints
-- `POST ${API_BASE}/api/v1/chat` — Evaluates playbooks and returns `ChatResponse`.
-- `POST ${API_BASE}/api/v1/action` — Executes explicit `tool_invocations` (e.g., `save_entry_artifact`) without re-evaluating the playbook.
+## 6. API endpoints
+
+- `POST ${API_BASE}/api/v1/chat` — returns the four-node envelope.
+- `POST ${API_BASE}/api/v1/action` — runs one tool and does not evaluate the playbook.

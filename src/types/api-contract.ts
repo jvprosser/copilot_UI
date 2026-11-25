@@ -58,7 +58,7 @@ export interface LaneMessage {
   timestamp: string;
 }
 
-export type CheckStatus = "assigned" | "did_not_apply";
+export type CheckStatus = "assigned" | "did_not_apply" | "skipped";
 
 export interface CheckItem {
   probe_id: string;
