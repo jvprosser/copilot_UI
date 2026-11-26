@@ -1,10 +1,11 @@
 "use client";
 
-import { FormEvent, useEffect, useRef } from "react";
-import { LaneMessage, RoutingDirective } from "@/types/api-contract";
+import { FormEvent, useEffect, useRef, useState } from "react";
+import { CheckItem, LaneMessage, RoutingDirective } from "@/types/api-contract";
 import { useSessionStore } from "@/store/sessionStore";
 
 const EMPTY_TRANSCRIPT: LaneMessage[] = [];
+const EMPTY_CHECKS: CheckItem[] = [];
 
 export interface LanePanelProps {
   directive: RoutingDirective;
@@ -28,7 +29,17 @@ export function LanePanel({ directive, fullHeight = false }: LanePanelProps) {
   const submitLaneMessage = useSessionStore((state) => state.submitLaneMessage);
   const executeToolAction = useSessionStore((state) => state.executeToolAction);
   const openCotModal = useSessionStore((state) => state.openCotModal);
+  const allChecks = useSessionStore(
+    (state) => state.activeContent?.checks ?? EMPTY_CHECKS,
+  );
+  const [showOtherChecks, setShowOtherChecks] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const checksHaveLane = allChecks.some((item) => item.lane != null);
+  const laneChecks = checksHaveLane
+    ? allChecks.filter((item) => item.lane === directive.lane)
+    : allChecks;
+  const assignedChecks = laneChecks.filter((item) => item.status === "assigned");
+  const otherChecks = laneChecks.filter((item) => item.status !== "assigned");
 
   useEffect(() => {
     const node = transcriptRef.current;
@@ -82,7 +93,36 @@ export function LanePanel({ directive, fullHeight = false }: LanePanelProps) {
         </div>
         <p className="text-sm text-slate-800">{directive.next_step}</p>
         <p className="text-xs text-slate-600">{directive.routing_reason}</p>
+        <p className="text-xs text-slate-500">
+          write {directive.write ?? "null"}
+          {directive.form ? ` · form ${directive.form}` : ""}
+        </p>
       </header>
+      <details open className="shrink-0 border-b border-slate-200 px-3 py-2">
+        <summary className="cursor-pointer text-xs font-medium text-slate-700">
+          Playbook checks
+        </summary>
+        <div className="mt-2 space-y-2">
+          {assignedChecks.map((item) => (
+            <CheckRow key={item.probe_id} item={item} highlighted />
+          ))}
+          {otherChecks.length > 0 ? (
+            <button
+              type="button"
+              className="text-xs font-medium text-slate-700"
+              onClick={() => setShowOtherChecks((open) => !open)}
+            >
+              {showOtherChecks ? "Hide" : "Show"} did not apply and skipped (
+              {otherChecks.length})
+            </button>
+          ) : null}
+          {showOtherChecks
+            ? otherChecks.map((item) => (
+                <CheckRow key={item.probe_id} item={item} highlighted={false} />
+              ))
+            : null}
+        </div>
+      </details>
       <div
         ref={transcriptRef}
         className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-2"
@@ -141,5 +181,33 @@ export function LanePanel({ directive, fullHeight = false }: LanePanelProps) {
         </button>
       </form>
     </section>
+  );
+}
+
+function CheckRow({
+  item,
+  highlighted,
+}: {
+  item: CheckItem;
+  highlighted: boolean;
+}) {
+  return (
+    <article
+      className={`rounded border px-2 py-1 text-xs ${
+        highlighted ? "border-amber-300 bg-amber-50" : "border-slate-200"
+      }`}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-slate-500">{item.probe_id}</span>
+        <span className="font-medium text-slate-900">{item.title}</span>
+        <span className="rounded bg-slate-200 px-1.5 py-0.5">{item.status}</span>
+        {item.skipped_reason ? (
+          <span className="rounded bg-slate-800 px-1.5 py-0.5 text-white">
+            {item.skipped_reason}
+          </span>
+        ) : null}
+      </div>
+      <p className="mt-1 whitespace-pre-wrap text-slate-700">{item.detail}</p>
+    </article>
   );
 }

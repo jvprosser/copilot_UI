@@ -129,12 +129,21 @@ export async function postChat(payload: ChatRequest): Promise<ChatResponse> {
   return postJson<ChatResponse>("/api/v1/chat", buildChatBody(payload));
 }
 
-export async function postAction(
-  payload: ActionRequest
-): Promise<ActionResponse> {
-  return postJson<ActionResponse>("/api/v1/action", {
+function buildActionBody(payload: ActionRequest): Record<string, unknown> {
+  const body: Record<string, unknown> = {
     intent: payload.intent,
     pack_id: payload.pack_id,
     payload: payload.payload,
-  });
+  };
+  if (payload.run_id != null) body.run_id = payload.run_id;
+  if (payload.entity_id != null) body.entity_id = payload.entity_id;
+  if (payload.lane != null) body.lane = payload.lane;
+  if (payload.dialect != null) body.dialect = payload.dialect;
+  return body;
+}
+
+export async function postAction(
+  payload: ActionRequest,
+): Promise<ActionResponse> {
+  return postJson<ActionResponse>("/api/v1/action", buildActionBody(payload));
 }

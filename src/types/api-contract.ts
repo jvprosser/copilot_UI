@@ -5,6 +5,8 @@
  */
 
 export type SqlDialect = "impala" | "trino";
+export type LayoutTemplate = "split_pane" | "tile_grid";
+export type FormFieldType = "text" | "number" | "boolean" | "date" | "select";
 
 export interface ChatRequest {
   user_text: string;
@@ -25,7 +27,7 @@ export interface ChatMeta {
 }
 
 export interface ChatLayout {
-  template: "split_pane";
+  template: LayoutTemplate;
   widgets: string[];
   focus: string;
 }
@@ -48,6 +50,7 @@ export interface RoutingDirective {
   write: string | null;
   allowed_tools: string[];
   letter_on_request: boolean;
+  form: string | null;
 }
 
 export interface LaneMessage {
@@ -66,6 +69,7 @@ export interface CheckItem {
   status: CheckStatus;
   detail: string;
   skipped_reason?: string | null;
+  lane?: string | null;
 }
 
 export interface ChatContent {
@@ -84,9 +88,26 @@ export interface ToolInvocation {
   payload: Record<string, unknown>;
 }
 
+export interface FormFieldSchema {
+  id: string;
+  type: FormFieldType;
+  label: string;
+  required: boolean;
+  options?: string[] | null;
+}
+
+export interface PendingForm {
+  form_id: string;
+  lane: string;
+  title: string;
+  submit_intent: string;
+  fields: FormFieldSchema[];
+}
+
 export interface ChatActions {
   quick_replies: string[];
   tool_invocations: ToolInvocation[];
+  pending_forms: PendingForm[];
 }
 
 export interface ChatResponse {
@@ -99,10 +120,15 @@ export interface ChatResponse {
 export interface ActionRequest {
   intent: string;
   pack_id: string;
+  run_id?: string | null;
+  entity_id?: string | null;
+  lane?: string | null;
+  dialect?: SqlDialect | null;
   payload: Record<string, unknown>;
 }
 
 export interface ActionResponse {
   status: string;
   artifact: string;
+  chat_response?: ChatResponse | null;
 }

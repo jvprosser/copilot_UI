@@ -6,6 +6,7 @@ import {
   ChatMeta,
   ChatResponse,
   LaneMessage,
+  PendingForm,
   SqlDialect,
   ToolInvocation,
 } from "@/types/api-contract";
@@ -68,6 +69,10 @@ export interface SessionState {
   submitIntake: (userText: string) => Promise<void>;
   submitLaneMessage: (lane: string, userText: string) => Promise<void>;
   executeToolAction: (invocation: ToolInvocation) => Promise<void>;
+  submitFormAction: (
+    form: PendingForm,
+    values: Record<string, unknown>,
+  ) => Promise<void>;
   openCotModal: (data: CotModalData) => void;
   closeCotModal: () => void;
   clearLaneNotice: () => void;
@@ -92,6 +97,57 @@ function formatError(err: unknown): string {
     return err.message;
   }
   return "An unexpected error occurred.";
+}
+
+function applyLaneResponse(
+  state: SessionState,
+  response: ChatResponse,
+  submittedLane: string,
+  clearDraft: boolean,
+): Pick<
+  SessionState,
+  | "activeMeta"
+  | "activeLayout"
+  | "activeContent"
+  | "activeActions"
+  | "transcriptsByLane"
+  | "cotByLane"
+  | "draftsByLane"
+  | "laneNotice"
+> {
+  const activeLane = response.meta.active_lane;
+  if (activeLane !== null) {
+    const stored = laneState(response, state.transcriptsByLane, state.cotByLane);
+    return {
+      activeMeta: response.meta,
+      activeLayout: response.layout,
+      activeContent: response.content,
+      activeActions: response.actions,
+      transcriptsByLane: stored.transcriptsByLane,
+      cotByLane: stored.cotByLane,
+      draftsByLane: clearDraft
+        ? { ...state.draftsByLane, [submittedLane]: "" }
+        : state.draftsByLane,
+      laneNotice: null,
+    };
+  }
+  return {
+    activeMeta: response.meta,
+    activeLayout: state.activeLayout,
+    activeContent: state.activeContent
+      ? {
+          ...state.activeContent,
+          routing_directives: response.content.routing_directives,
+          checks: response.content.checks,
+          routing_summary: response.content.routing_summary,
+        }
+      : state.activeContent,
+    activeActions: response.actions,
+    transcriptsByLane: state.transcriptsByLane,
+    cotByLane: state.cotByLane,
+    draftsByLane: state.draftsByLane,
+    laneNotice: { lane: submittedLane, text: response.content.chat_text },
+  };
 }
 
 function laneState(
@@ -231,42 +287,65 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         entity_id: entityId,
         lane,
       });
-      const activeLane = response.meta.active_lane;
-      if (activeLane !== null) {
-        set((state) => {
-          const stored = laneState(
-            response,
-            state.transcriptsByLane,
-            state.cotByLane,
-          );
-          return {
-            activeMeta: response.meta,
-            activeLayout: response.layout,
-            activeContent: response.content,
-            activeActions: response.actions,
-            transcriptsByLane: stored.transcriptsByLane,
-            cotByLane: stored.cotByLane,
-            draftsByLane: { ...state.draftsByLane, [lane]: "" },
-            laneNotice: null,
-          };
-        });
-        return;
-      }
-      set((state) => ({
-        activeMeta: response.meta,
-        activeActions: response.actions,
-        activeContent: state.activeContent
-          ? {
-              ...state.activeContent,
-              routing_directives: response.content.routing_directives,
-              checks: response.content.checks,
-              routing_summary: response.content.routing_summary,
-            }
-          : state.activeContent,
-        laneNotice: { lane, text: response.content.chat_text },
-      }));
+      set((state) => applyLaneResponse(state, response, lane, true));
     } catch (err: unknown) {
       set({ error: formatError(err) });
+    } finally {
+      set({ isSubmitting: false });
+    }
+  },
+
+  submitFormAction: async (form, values) => {
+    if (get().isSubmitting) return;
+    set({ isSubmitting: true, error: null });
+    try {
+      const { packId, dialectOverride, activeMeta } = get();
+      const response = await postAction({
+        intent: form.submit_intent,
+        pack_id: packId,
+        run_id: activeMeta?.run_id,
+        entity_id: activeMeta?.entity_id,
+        lane: form.lane,
+        dialect: dialectOverride,
+        payload: { ...values, form_id: form.form_id },
+      });
+      const message = response.artifact
+        ? `Saved ${response.artifact}`
+        : `Submitted ${form.title}`;
+      if (response.chat_response) {
+        const envelope = response.chat_response;
+        set((state) => ({
+          ...applyLaneResponse(state, envelope, form.lane, false),
+          actionToast: {
+            id: `${Date.now()}`,
+            intent: form.submit_intent,
+            status: "success",
+            message,
+            artifact: response.artifact || undefined,
+          },
+        }));
+        return;
+      }
+      set({
+        actionToast: {
+          id: `${Date.now()}`,
+          intent: form.submit_intent,
+          status: "success",
+          message,
+          artifact: response.artifact || undefined,
+        },
+      });
+    } catch (err: unknown) {
+      const message = formatError(err);
+      set({
+        error: message,
+        actionToast: {
+          id: `${Date.now()}`,
+          intent: form.submit_intent,
+          status: "error",
+          message,
+        },
+      });
     } finally {
       set({ isSubmitting: false });
     }

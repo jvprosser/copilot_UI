@@ -2,15 +2,17 @@
 
 import { CotDialog } from "@/components/layout/CotDialog";
 import { SplitPane } from "@/components/layout/SplitPane";
+import { TileGrid } from "@/components/layout/TileGrid";
 import { useSessionStore } from "@/store/sessionStore";
 
 export default function HomePage() {
+  const template = useSessionStore((state) => state.activeLayout?.template);
   const actionToast = useSessionStore((state) => state.actionToast);
   const clearActionToast = useSessionStore((state) => state.clearActionToast);
 
   return (
     <>
-      <SplitPane />
+      {template === "tile_grid" ? <TileGrid /> : <SplitPane />}
       <CotDialog />
       {actionToast ? (
         <div className="fixed bottom-4 right-4 z-40 w-80 rounded-lg border border-slate-200 bg-white p-3 shadow-lg">
